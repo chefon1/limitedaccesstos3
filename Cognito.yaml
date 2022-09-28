@@ -372,6 +372,7 @@ Resources:
       AuthorizationScopes: 
         - !Sub https://${APIGateway}.execute-api.${AWS::Region}.amazonaws.com/presigned.create
       AuthorizerId: !Ref Authorizer
+      RequestValidatorId: !Ref RequestValidator
       MethodResponses: 
         - StatusCode: 200
           ResponseModels:
@@ -379,7 +380,7 @@ Resources:
       HttpMethod: GET 
       RequestParameters:
         method.request.querystring.bucket: true 
-        method.request.querystring.expires: true 
+        method.request.querystring.expires: false 
         method.request.querystring.key: true 
       Integration:
         Type: AWS_PROXY
@@ -403,7 +404,13 @@ Resources:
   #       IntegrationHttpMethod: POST
   #       Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaTwoArn}/invocations
 
-
+  RequestValidator:
+    Type: AWS::ApiGateway::RequestValidator
+    Properties:
+      Name: !Sub ${Environment}-validator
+      RestApiId: !Ref APIGateway
+      ValidateRequestBody: true
+      ValidateRequestParameters: true
 
   Deployment:
     DependsOn:

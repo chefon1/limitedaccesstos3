@@ -1,0 +1,104 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Template for lambdaFunction
+
+
+#################################################################
+########################### Parameters ##########################
+#################################################################
+
+Parameters:
+  Environment:
+    Type: String
+  
+
+#################################################################
+########################### Resources ###########################
+#################################################################
+
+Resources:
+
+  LambdaRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: !Sub ${Environment}-LambdaRoleS3
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+      Policies:
+        - PolicyName: !Sub ${Environment}-S3Policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - "s3:GetObject"
+                  - "s3:PutObject"
+                  - "s3:DeleteObject"
+                Resource: "*"
+
+  Lambda1:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - LambdaRole
+    Properties:
+      FunctionName: !Sub ${Environment}-S3Lambda
+      Description: "Lambda Function"
+      Handler: index.handler
+      MemorySize: 128
+      Role: !GetAtt LambdaRole.Arn
+      Runtime: nodejs16.x
+      Timeout: 300
+      Code:
+        ZipFile:  |
+          const AWS = require("aws-sdk");
+          const s3 = new AWS.S3();
+
+          exports.handler = async (event) => {
+              
+              const url = await s3.getSignedUrl('getObject', {
+                Bucket: event.queryStringParameters.bucket,
+                Key: event.queryStringParameters.key,
+                Expires: event.queryStringParameters.expires ? parseInt(event.queryStringParameters.expires) : 60
+              });
+              
+              // TODO implement
+              const response = {
+                  statusCode: 200,
+                    isBase64Encoded: false,
+                  headers: {
+                  'Content-Type': 'application/json',
+                },
+                  body:  JSON.stringify({
+                    url
+                  })
+              };
+              return response;
+      Tags:
+        - Key: Name
+          Value: !Ref Environment
+
+
+
+
+
+
+#################################################################
+########################### Outputs #############################
+#################################################################
+
+
+Outputs:
+  LambdaOneArn:
+    Value: !GetAtt Lambda1.Arn
+    Description: Lambda Function ARN
+  LambdaOneName:
+    Value: !Ref Lambda1
+    Description: Lambda Function Name

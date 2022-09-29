@@ -1,0 +1,281 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: This template deploys a Cloudfront distribution with an S3 origin.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Tags"
+        Parameters:
+          - Application
+          - Environment
+          - CustomerName
+          - CustomerDivision
+      - Label:
+          default: "Site Configuration"
+        Parameters:
+          - BucketName
+          - LoggingBucketName
+          - CfRootObject
+          - CertificateDomainName
+
+Parameters:
+  Application:
+    Description: Tag Key = application:name
+    Type: String
+  CustomerName:
+    Description: Tag Key = customer:name
+    Type: String
+  CustomerDivision:
+    Description: Tag Key = customer:division
+    Type: String
+  Environment:
+    Description: Tag Key = environment
+    Type: String
+  ###################### Bucket name
+  BucketName:
+    Description: The name for your S3 bucket
+    Type: String
+  LoggingBucketName:
+    Description: The name for your S3 logging bucket
+    Type: String
+  CfRootObject:
+    Description: The name for the Cloudfront root object
+    Type: String
+  CertificateDomainName:
+    Description: The domain for your ACM certificate. This is optional and the certificate will only be created and attached if a value is present.
+    Type: String
+  WebACL:
+    Description: The ID for the WebACL
+    Type: String
+  SNSArn:
+    Type: String
+  Threshold:
+    Type: Number
+    Default: 20
+  ComparisonOperator:
+    Type: String
+    Default: GreaterThanThreshold
+  Period:
+    Type: Number
+    Default: 60
+  EvaluationPeriods:
+    Type: Number
+    Default: 1
+
+Conditions:
+  CreateCertificate: !Not [!Equals [!Ref CertificateDomainName, ""]]
+  AttachWAF: !Not [!Equals [!Ref WebACL, ""]]
+
+Resources:
+  MyCertificate:
+    Type: "AWS::CertificateManager::Certificate"
+    Condition: CreateCertificate
+    Properties:
+      DomainName: !Ref CertificateDomainName
+      ValidationMethod: DNS
+
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      WebsiteConfiguration:
+        IndexDocument: !Ref CfRootObject
+      Tags:
+        - Key: "application:name"
+          Value: !Ref Application
+        - Key: environment
+          Value: !Ref Environment
+        - Key: "customer:name"
+          Value: !Ref CustomerName
+        - Key: "customer:division"
+          Value: !Ref CustomerDivision
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BucketName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${CloudFrontOriginIdentity}"
+            Action:
+              - "s3:GetObject"
+            Resource: !Sub
+              - "arn:aws:s3:::${SubBucketName}/*"
+              - SubBucketName: !Ref BucketName
+  LoggingBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref LoggingBucketName
+      AccessControl: LogDeliveryWrite
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: ObjectWriter
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: "application:name"
+          Value: !Ref Application
+        - Key: environment
+          Value: !Ref Environment
+        - Key: "customer:name"
+          Value: !Ref CustomerName
+        - Key: "customer:division"
+          Value: !Ref CustomerDivision
+
+  CloudFrontOriginIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: "origin identity"
+  CfDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        WebACLId: !If [CreateCertificate, !Ref WebACL, !Ref "AWS::NoValue"]
+        Origins:
+          - DomainName: !Sub
+              - "${SubBucketName}.s3.us-east-1.amazonaws.com"
+              - SubBucketName: !Ref BucketName
+            Id: !Sub
+              - "${SubBucketName}.s3.us-east-1.amazonaws.com"
+              - SubBucketName: !Ref BucketName
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${CloudFrontOriginIdentity}"
+        Enabled: "true"
+        HttpVersion: "http2"
+        DefaultRootObject: !Ref CfRootObject
+        Logging:
+          IncludeCookies: "false"
+          Bucket: !Sub
+            - "${SubLoggingBucketName}.s3.us-east-1.amazonaws.com"
+            - SubLoggingBucketName: !Ref LoggingBucketName
+        PriceClass: "PriceClass_100"
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+          TargetOriginId: !Sub
+            - "${SubBucketName}.s3.us-east-1.amazonaws.com"
+            - SubBucketName: !Ref BucketName
+          ForwardedValues:
+            QueryString: "false"
+            Cookies:
+              Forward: none
+          ViewerProtocolPolicy: redirect-to-https
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: "true"
+          AcmCertificateArn:
+            !If [
+              CreateCertificate,
+              !Join [
+                ":",
+                [
+                  "arn:aws:acm",
+                  !Ref AWS::Region,
+                  !Ref AWS::AccountId,
+                  !Ref MyCertificate,
+                ],
+              ],
+              !Ref "AWS::NoValue",
+            ]
+      Tags:
+        - Key: "application:name"
+          Value: !Ref Application
+        - Key: environment
+          Value: !Ref Environment
+        - Key: "customer:name"
+          Value: !Ref CustomerName
+        - Key: "customer:division"
+          Value: !Ref CustomerDivision
+    DependsOn:
+      - LoggingBucket
+      - Bucket
+
+
+  Alarm4xx:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmActions:
+      - !Ref SNSArn
+      AlarmDescription: 'Alarm4xx'
+      ComparisonOperator: !Ref ComparisonOperator
+      Dimensions:
+      - Name: Region
+        Value: Global
+      - Name: DistributionId
+        Value: !Ref CfDistribution
+      EvaluationPeriods: !Ref EvaluationPeriods
+      MetricName: 4xxErrorRate
+      Namespace: 'AWS/CloudFront'
+      OKActions:
+      - !Ref SNSArn
+      Period: !Ref Period
+      Statistic: Average
+      Threshold: !Ref Threshold
+      TreatMissingData: notBreaching
+
+
+
+  Alarm5xx:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmActions:
+      - !Ref SNSArn
+      AlarmDescription: 'Alarm5xx'
+      ComparisonOperator: !Ref ComparisonOperator
+      Dimensions:
+      - Name: Region
+        Value: Global
+      - Name: DistributionId
+        Value: !Ref CfDistribution
+      EvaluationPeriods: !Ref EvaluationPeriods
+      MetricName: 5xxErrorRate
+      Namespace: 'AWS/CloudFront'
+      OKActions:
+      - !Ref SNSArn
+      Period: !Ref Period
+      Statistic: Average
+      Threshold: !Ref Threshold
+      TreatMissingData: notBreaching
+
+
+  AlarmTotalError:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmActions:
+      - !Ref SNSArn
+      AlarmDescription: 'TotalErrorRate'
+      ComparisonOperator: !Ref ComparisonOperator
+      Dimensions:
+      - Name: Region
+        Value: Global
+      - Name: DistributionId
+        Value: !Ref CfDistribution
+      EvaluationPeriods: !Ref EvaluationPeriods
+      MetricName: TotalErrorRate
+      Namespace: 'AWS/CloudFront'
+      OKActions:
+      - !Ref SNSArn
+      Period: !Ref Period
+      Statistic: Average
+      Threshold: !Ref Threshold
+      TreatMissingData: notBreaching
+
+Outputs:
+  StackCloudfront:
+    Description: The ID of the Cloudfront distribution
+    Value: !Ref CfDistribution
+    Export:
+      Name: !Sub "${AWS::StackName}-CLOUDFRONTID"
